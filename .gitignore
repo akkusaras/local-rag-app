@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# Local database (regenerate with init_db.py + src/ingest.py)
+db/*.db
+db/*.sqlite3
+
+# Business/pricing data - do not publish real company data
+*.xlsx
+*.xls
+
+
+# OS
+.DS_Store
+Thumbs.db
