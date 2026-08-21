@@ -19,8 +19,10 @@ DIMENSION_PATTERN = re.compile(r"\d+\s*x\s*\d+", re.IGNORECASE)
 
 EXTRACTION_SYSTEM_PROMPT = (
     "You are a data extraction assistant for a laser-cutting price calculator. "
-    "The user's message may describe one or several order items. Extract the "
-    "material name, width, height, and quantity for EVERY item mentioned. "
+    "The user's message may describe one or several order items, in any word "
+    "order (material, dimensions, and quantity can appear in any sequence). "
+    "Extract the material name, width, height, and quantity for EVERY item "
+    "mentioned. "
     "Respond with ONLY a valid JSON object in exactly this shape, with no "
     "extra text, no markdown, and no explanation: "
     '{"items": [{"material": "acacak", "width": 0, "height": 0, "quantity": 10}, '
@@ -31,9 +33,16 @@ EXTRACTION_SYSTEM_PROMPT = (
     "STRICT: If the user does not explicitly specify the width, height, or "
     "quantity for an item, you MUST set that missing field's value to 0 in "
     "the JSON. NEVER guess, assume, or invent default numbers (like 10x10). "
-    "If the data is missing from the text, return 0 for that field."
+    "If the data is missing from the text, return 0 for that field.\n\n"
+    "Examples:\n"
+    'User: "10x10 pleksi 50 adet ne kadar tutar?"\n'
+    'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 50}]}\n'
+    'User: "pleksi malzemeden 10x10 ölçüsünde 50 adet istiyorum"\n'
+    'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 50}]}\n'
+    'User: "10 adet açacak ve 20 adet organizer istiyorum"\n'
+    'JSON: {"items": [{"material": "açacak", "width": 0, "height": 0, "quantity": 10}, '
+    '{"material": "organizer", "width": 0, "height": 0, "quantity": 20}]}'
 )
-
 
 def _is_pricing_query(query: str) -> bool:
     # Mirror src.pricing._normalize's dotted-İ handling so Turkish keyword
