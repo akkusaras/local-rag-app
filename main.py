@@ -14,6 +14,25 @@ PRICING_KEYWORDS = (
     "kesim",
     "tutar",
 )
+
+
+GREETING_KEYWORDS = (
+    "selam", "merhaba", "naber", "günaydın", "iyi günler",
+    "iyi akşamlar", "nasılsın", "hey", "selamlar",
+)
+
+GREETING_RESPONSE = (
+    "Selam! 👋 Ben Melis Lazer'in yapay zeka asistanıyım. "
+    "Dokümanlarımızla ilgili sorularını yanıtlayabilir, ya da malzeme, "
+    "en, boy ve adet bilgisi vererek fiyat teklifi hesaplayabilirim.\n\n"
+    "Örnek: \"50 adet 10x10 pleksi ne kadar tutar?\""
+)
+
+
+def _is_greeting(query: str) -> bool:
+    lowered = query.strip().replace("İ", "i").lower()
+    return any(lowered == g or lowered.startswith(g + " ") or lowered.startswith(g + "!")
+               for g in GREETING_KEYWORDS)
 MATERIAL_KEYWORDS = ("pleksi", "mdf", "dekota", "ahşap", "epoksi")
 DIMENSION_PATTERN = re.compile(r"\d+\s*x\s*\d+", re.IGNORECASE)
 
@@ -160,11 +179,10 @@ def _format_pricing_response(query: str) -> str:
 
 
 def process_query(question: str) -> str:
-    """Hybrid dispatch: route `question` to the pricing module or the RAG pipeline.
+    """Hybrid dispatch: route `question` to greeting, pricing, or the RAG pipeline."""
+    if _is_greeting(question):
+        return GREETING_RESPONSE
 
-    Returns the formatted response text. Shared by the CLI and the Streamlit UI
-    so both surfaces stay in sync with a single decision point.
-    """
     if _is_pricing_query(question):
         return _format_pricing_response(question)
 
