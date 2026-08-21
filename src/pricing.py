@@ -88,16 +88,21 @@ def _get_materials() -> dict[str, FixedMaterial | AreaMaterial]:
         _materials = _build_materials()
     return _materials
 
-
 def _resolve_material(material: str, materials: dict[str, FixedMaterial | AreaMaterial]) -> str | None:
     key = _normalize(material)
     if key in materials:
         return key
 
-    # Fall back to a loose substring match (e.g. "pleksi" -> "ahşap + pleksi").
-    for candidate in materials:
-        if key in candidate or candidate in key:
-            return candidate
+    # Substring matches: several materials can share a word (e.g. "ahşap"
+    # appears in both "ahşap + pleksi" and "ahşap + uv"), so don't just take
+    # the first candidate found — pick the one most similar overall to what
+    # was typed.
+    substring_matches = [c for c in materials if key in c or c in key]
+    if substring_matches:
+        return max(
+            substring_matches,
+            key=lambda c: difflib.SequenceMatcher(None, key, c).ratio(),
+        )
 
     # Fall back to fuzzy matching for typos (e.g. "pleksii" -> "pleksi").
     close_matches = difflib.get_close_matches(key, materials.keys(), n=1, cutoff=0.7)
@@ -128,8 +133,13 @@ def _to_float_or_none(value: float | None) -> float | None:
         return None
 
 
-def calculate_price(material: str, width: float, height: float, quantity: int) -> float:
-    """Calculate the total price for `material` at the given size and quantity."""
+def calculate_price(material: str, width: float, height: float, quantity: int) -> tuple[str, float]:
+    """Calculate the total price for `material` at the given size and quantity.
+
+    Returns (resolved_material_name, total_price) — resolved_material_name is
+    the canonical name from the price list, not necessarily what the user
+    typed (typos/substring matches resolve to the correct material).
+    """
     quantity = _require_positive_number(quantity)
 
     if not material or not str(material).strip():
@@ -144,11 +154,11 @@ def calculate_price(material: str, width: float, height: float, quantity: int) -
     entry = materials[resolved_key]
 
     if entry["type"] == "fixed":
-        return quantity * entry["price"]
+        return resolved_key, quantity * entry["price"]
 
     width_value = _to_float_or_none(width)
     height_value = _to_float_or_none(height)
     if not width_value or not height_value:
         raise ValueError(_MISSING_AREA_MESSAGE)
 
-    return entry["multiplier"] * width_value * height_value * quantity
+    return resolved_key, entry["multiplier"] * width_value * height_value * quantity
