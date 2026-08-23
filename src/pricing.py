@@ -1,4 +1,5 @@
 import difflib
+import re
 from pathlib import Path
 from typing import TypedDict
 
@@ -35,8 +36,15 @@ _materials: dict[str, FixedMaterial | AreaMaterial] | None = None
 
 
 def _normalize(text: str) -> str:
-    """Lowercase a possibly-Turkish string without the dotted-İ combining-mark artifact."""
-    return text.strip().replace("İ", "i").lower()
+    """Lowercase a possibly-Turkish string using Turkish casing rules.
+
+    Python's locale-unaware str.lower() maps both dotted İ and dotless I to
+    the same plain "i", but Turkish has two independent letter pairs (İ/i and
+    I/ı). Left unhandled, an ALL-CAPS source (e.g. "ANAHTARLIK" in the price
+    list) normalizes to "anahtarlik" while a user typing lowercase
+    "anahtarlık" normalizes to itself, so the two never token-match.
+    """
+    return text.strip().replace("İ", "i").replace("I", "ı").lower()
 
 
 def _is_area_dimension(value: float) -> bool:
@@ -53,8 +61,11 @@ def _build_materials(excel_path: Path = EXCEL_PATH) -> dict[str, FixedMaterial |
     All other rows are area-based (e.g. Pleksi, MDF):
     multiplier = total_price / (quantity * width * height)
 
-    Rows with a missing material name, or a non-numeric/zero quantity or price,
-    are skipped.
+    Rows with a missing material name inherit the name of the nearest
+    preceding row that had one (these are secondary sizes/variants of the
+    product listed above them, e.g. an alternate size for "Harf Ahşap").
+
+    Rows with a non-numeric/zero quantity or price are skipped.
     """
     df = pd.read_excel(excel_path, sheet_name=0, header=HEADER_ROW)
 
@@ -65,9 +76,15 @@ def _build_materials(excel_path: Path = EXCEL_PATH) -> dict[str, FixedMaterial |
     prices = pd.to_numeric(df.iloc[:, PRICE_COL], errors="coerce")
 
     materials: dict[str, FixedMaterial | AreaMaterial] = {}
+    last_name: str | None = None
     for name, quantity, width, height, price in zip(names, quantities, widths, heights, prices):
-        if not isinstance(name, str) or not name.strip():
+        if isinstance(name, str) and name.strip():
+            last_name = name
+        elif last_name is not None:
+            name = last_name
+        else:
             continue
+
         if pd.isna(quantity) or quantity == 0 or pd.isna(price):
             continue
 
@@ -88,21 +105,43 @@ def _get_materials() -> dict[str, FixedMaterial | AreaMaterial]:
         _materials = _build_materials()
     return _materials
 
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def _tokenize(text: str) -> set[str]:
+    return set(_TOKEN_RE.findall(_normalize(text)))
+
+
 def _resolve_material(material: str, materials: dict[str, FixedMaterial | AreaMaterial]) -> str | None:
     key = _normalize(material)
     if key in materials:
         return key
 
-    # Substring matches: several materials can share a word (e.g. "ahşap"
-    # appears in both "ahşap + pleksi" and "ahşap + uv"), so don't just take
-    # the first candidate found — pick the one most similar overall to what
-    # was typed.
-    substring_matches = [c for c in materials if key in c or c in key]
-    if substring_matches:
-        return max(
-            substring_matches,
-            key=lambda c: difflib.SequenceMatcher(None, key, c).ratio(),
-        )
+    # Token-set matches: several materials share a word (e.g. "ahşap" appears
+    # in both "ahşap + pleksi" and "ahşap + uv", and "dekota" is both its own
+    # row and part of "dekota + uv"). Only consider a candidate if its tokens
+    # are a superset or subset of what was typed (so "dekota" alone doesn't
+    # match "gold gümüş mdf"), then score by how completely the token sets
+    # overlap (Jaccard) so a compound request like "dekota + uv" prefers the
+    # compound row over the shorter standalone "dekota" match, and a plain
+    # request like "dekota" still prefers the plain row over the compound
+    # one. Ties (e.g. "ahşap" against multiple "ahşap + X" rows) fall back to
+    # overall string similarity.
+    key_tokens = _tokenize(material)
+    if key_tokens:
+        candidates = [
+            c
+            for c in materials
+            if (c_tokens := _tokenize(c)) and (key_tokens <= c_tokens or c_tokens <= key_tokens)
+        ]
+        if candidates:
+            def score(c: str) -> tuple[float, float]:
+                c_tokens = _tokenize(c)
+                jaccard = len(key_tokens & c_tokens) / len(key_tokens | c_tokens)
+                similarity = difflib.SequenceMatcher(None, key, c).ratio()
+                return (jaccard, similarity)
+
+            return max(candidates, key=score)
 
     # Fall back to fuzzy matching for typos (e.g. "pleksii" -> "pleksi").
     close_matches = difflib.get_close_matches(key, materials.keys(), n=1, cutoff=0.7)

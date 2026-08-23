@@ -1,3 +1,8 @@
+def _normalize_quantity_words(text: str) -> str:
+    """Expand colloquial Turkish quantity words (e.g. 'bi' -> 'bir') so the
+    extraction model doesn't have to guess slang."""
+    return re.sub(r"\bbi\b", "bir", text, flags=re.IGNORECASE)
+
 import json
 import re
 
@@ -52,7 +57,16 @@ EXTRACTION_SYSTEM_PROMPT = (
     "STRICT: If the user does not explicitly specify the width, height, or "
     "quantity for an item, you MUST set that missing field's value to 0 in "
     "the JSON. NEVER guess, assume, or invent default numbers (like 10x10). "
-    "If the data is missing from the text, return 0 for that field.\n\n"
+    "If the data is missing from the text, return 0 for that field. "
+    "STRICT: Material names can be compound, made of two or more words, "
+    "joined either by '+'/'-' (e.g. \"dekota + uv\", \"ahşap + pleksi\") or "
+    "simply written next to each other with no separator (e.g. \"açacak "
+    "anahtarlık\", where \"anahtarlık\" is a modifier narrowing which "
+    "\"açacak\" variant is meant, not a separate item). Always capture the "
+    "FULL material phrase exactly as written, including every word and any "
+    "separator — NEVER truncate a compound name down to just its first "
+    "word. A longer, more specific compound phrase always takes priority "
+    "over treating only its first word as the material name.\n\n"
     "Examples:\n"
     'User: "10x10 pleksi 50 adet ne kadar tutar?"\n'
     'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 50}]}\n'
@@ -60,7 +74,13 @@ EXTRACTION_SYSTEM_PROMPT = (
     'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 50}]}\n'
     'User: "10 adet açacak ve 20 adet organizer istiyorum"\n'
     'JSON: {"items": [{"material": "açacak", "width": 0, "height": 0, "quantity": 10}, '
-    '{"material": "organizer", "width": 0, "height": 0, "quantity": 20}]}'
+    '{"material": "organizer", "width": 0, "height": 0, "quantity": 20}]}\n'
+    'User: "Açacak anahtarlık istiyorum, 50 adet ne kadar tutar?"\n'
+    'JSON: {"items": [{"material": "açacak anahtarlık", "width": 0, "height": 0, "quantity": 50}]}\n'
+    'User: "bir adet organizer istiyorum"\n'
+    'JSON: {"items": [{"material": "organizer", "width": 0, "height": 0, "quantity": 1}]}\n'
+    'User: "Dekota + UV istiyorum"\n'
+    'JSON: {"items": [{"material": "dekota + uv", "width": 0, "height": 0, "quantity": 0}]}'
 )
 
 def _is_pricing_query(query: str) -> bool:
@@ -99,9 +119,10 @@ def _extract_json_text(raw: str) -> str:
 
 
 def _extract_pricing_request(query: str) -> dict:
+    normalized_query = _normalize_quantity_words(query)
     messages = [
         {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
-        {"role": "user", "content": query},
+        {"role": "user", "content": normalized_query},
     ]
     completion = get_chat_client().complete_chat(messages)
     raw = completion.choices[0].message.content.strip()
@@ -127,9 +148,10 @@ def _calculate_line_item(item: dict) -> tuple[str, int, float]:
             "bilgilerini tam olarak giriniz."
         )
 
-    total_price = calculate_price(str(material) if material else material, width, height, quantity)
-    return str(material), quantity, total_price
-
+    resolved_material, total_price = calculate_price(
+    str(material) if material else material, width, height, quantity
+    )
+    return resolved_material, quantity, total_price
 
 def _format_pricing_response(query: str) -> str:
     try:
