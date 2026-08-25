@@ -1,7 +1,7 @@
 import difflib
 import re
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 import pandas as pd
 
@@ -23,12 +23,12 @@ _MISSING_AREA_MESSAGE = "Lütfen alan bazlı bu malzeme için en ve boy bilgiler
 
 
 class FixedMaterial(TypedDict):
-    type: str  # "fixed"
+    type: Literal["fixed"]
     price: float
 
 
 class AreaMaterial(TypedDict):
-    type: str  # "area"
+    type: Literal["area"]
     multiplier: float
 
 
@@ -172,7 +172,12 @@ def _to_float_or_none(value: float | None) -> float | None:
         return None
 
 
-def calculate_price(material: str, width: float, height: float, quantity: int) -> tuple[str, float]:
+def calculate_price(
+    material: str | None,
+    width: float | None,
+    height: float | None,
+    quantity: float | None,
+) -> tuple[str, float]:
     """Calculate the total price for `material` at the given size and quantity.
 
     Returns (resolved_material_name, total_price) — resolved_material_name is

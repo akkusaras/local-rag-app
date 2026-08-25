@@ -151,6 +151,7 @@ def _calculate_line_item(item: dict) -> tuple[str, int, float]:
     resolved_material, total_price = calculate_price(
     str(material) if material else material, width, height, quantity
     )
+    assert quantity is not None
     return resolved_material, quantity, total_price
 
 def _format_pricing_response(query: str) -> str:
