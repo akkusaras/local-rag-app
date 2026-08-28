@@ -1,7 +1,7 @@
 import difflib
 import re
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, cast
 
 import pandas as pd
 
@@ -70,10 +70,16 @@ def _build_materials(excel_path: Path = EXCEL_PATH) -> dict[str, FixedMaterial |
     df = pd.read_excel(excel_path, sheet_name=0, header=HEADER_ROW)
 
     names = df.iloc[:, NAME_COL]
-    quantities = pd.to_numeric(df.iloc[:, QUANTITY_COL], errors="coerce")
-    widths = pd.to_numeric(df.iloc[:, WIDTH_COL], errors="coerce")
-    heights = pd.to_numeric(df.iloc[:, HEIGHT_COL], errors="coerce")
-    prices = pd.to_numeric(df.iloc[:, PRICE_COL], errors="coerce")
+    # cast(): pandas' type stubs don't always narrow pd.to_numeric()'s return
+    # type correctly when given a Series (Pylance sometimes infers a bare
+    # "float" instead of "Series[float]"), which then makes the zip() below
+    # look invalid. The runtime value is always a Series here since the
+    # input is always a Series (a DataFrame column) — this cast only
+    # corrects the static type, it doesn't change any behavior.
+    quantities = cast(pd.Series, pd.to_numeric(df.iloc[:, QUANTITY_COL], errors="coerce"))
+    widths = cast(pd.Series, pd.to_numeric(df.iloc[:, WIDTH_COL], errors="coerce"))
+    heights = cast(pd.Series, pd.to_numeric(df.iloc[:, HEIGHT_COL], errors="coerce"))
+    prices = cast(pd.Series, pd.to_numeric(df.iloc[:, PRICE_COL], errors="coerce"))
 
     materials: dict[str, FixedMaterial | AreaMaterial] = {}
     last_name: str | None = None
