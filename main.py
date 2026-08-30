@@ -6,7 +6,7 @@ def _normalize_quantity_words(text: str) -> str:
 import json
 import re
 
-from src.pricing import calculate_price
+from src.pricing import calculate_max_quantity, calculate_price
 from src.rag_pipeline import answer_query, get_chat_client
 
 PRICING_KEYWORDS = (
@@ -18,6 +18,9 @@ PRICING_KEYWORDS = (
     "lazım",
     "kesim",
     "tutar",
+    "bütçe",
+    "kaça alırım",
+    "kaç adet alabilirim",
 )
 
 
@@ -30,7 +33,8 @@ GREETING_RESPONSE = (
     "Selam! 👋 Ben Melis Lazer'in yapay zeka asistanıyım. "
     "Dokümanlarımızla ilgili sorularını yanıtlayabilir, ya da malzeme, "
     "en, boy ve adet bilgisi vererek fiyat teklifi hesaplayabilirim.\n\n"
-    "Örnek: \"50 adet 10x10 pleksi ne kadar tutar?\""
+    "Örnek: \"50 adet 10x10 pleksi ne kadar tutar?\"\n"
+    "Bütçen varsa da olur: \"2000 TL bütçem var, 10x10 pleksi kaç adet alabilirim?\""
 )
 
 
@@ -44,20 +48,31 @@ DIMENSION_PATTERN = re.compile(r"\d+\s*x\s*\d+", re.IGNORECASE)
 EXTRACTION_SYSTEM_PROMPT = (
     "You are a data extraction assistant for a laser-cutting price calculator. "
     "The user's message may describe one or several order items, in any word "
-    "order (material, dimensions, and quantity can appear in any sequence). "
-    "Extract the material name, width, height, and quantity for EVERY item "
-    "mentioned. "
+    "order (material, dimensions, quantity, and budget can appear in any "
+    "sequence). "
+    "Extract the material name, width, height, quantity, and budget for "
+    "EVERY item mentioned. "
     "Respond with ONLY a valid JSON object in exactly this shape, with no "
     "extra text, no markdown, and no explanation: "
-    '{"items": [{"material": "acacak", "width": 0, "height": 0, "quantity": 10}, '
-    '{"material": "organizer", "width": 0, "height": 0, "quantity": 20}]}. '
+    '{"items": [{"material": "acacak", "width": 0, "height": 0, "quantity": 10, "budget": 0}, '
+    '{"material": "organizer", "width": 0, "height": 0, "quantity": 20, "budget": 0}]}. '
     "The \"items\" list must contain one object per distinct item, even if "
     "there is only a single item. "
-    "Widths and heights are numbers in centimeters. "
-    "STRICT: If the user does not explicitly specify the width, height, or "
-    "quantity for an item, you MUST set that missing field's value to 0 in "
-    "the JSON. NEVER guess, assume, or invent default numbers (like 10x10). "
-    "If the data is missing from the text, return 0 for that field. "
+    "Widths and heights are numbers in centimeters. Budget is a plain number "
+    "in Turkish lira, with no currency symbol or text. "
+    "STRICT: If the user does not explicitly specify the width, height, "
+    "quantity, or budget for an item, you MUST set that missing field's "
+    "value to 0 in the JSON. NEVER guess, assume, or invent default numbers "
+    "(like 10x10). If the data is missing from the text, return 0 for that "
+    "field. "
+    "STRICT: Some users give a total budget instead of a quantity, asking "
+    "how many items it buys (e.g. \"2000 TL bütçem var, kaç adet alabilirim?\", "
+    "\"1000 liram var\", \"500 TL'ye kaç tane çıkar\"). When this happens, set "
+    "\"quantity\" to 0 and put the budget amount in \"budget\". NEVER invent a "
+    "quantity when only a budget is given, and NEVER put a number into both "
+    "\"quantity\" and \"budget\" for the same item — exactly one of them "
+    "should be non-zero (unless the user gave neither, in which case both "
+    "are 0). "
     "STRICT: Material names can be compound, made of two or more words, "
     "joined either by '+'/'-' (e.g. \"dekota + uv\", \"ahşap + pleksi\") or "
     "simply written next to each other with no separator (e.g. \"açacak "
@@ -69,18 +84,22 @@ EXTRACTION_SYSTEM_PROMPT = (
     "over treating only its first word as the material name.\n\n"
     "Examples:\n"
     'User: "10x10 pleksi 50 adet ne kadar tutar?"\n'
-    'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 50}]}\n'
+    'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 50, "budget": 0}]}\n'
     'User: "pleksi malzemeden 10x10 ölçüsünde 50 adet istiyorum"\n'
-    'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 50}]}\n'
+    'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 50, "budget": 0}]}\n'
     'User: "10 adet açacak ve 20 adet organizer istiyorum"\n'
-    'JSON: {"items": [{"material": "açacak", "width": 0, "height": 0, "quantity": 10}, '
-    '{"material": "organizer", "width": 0, "height": 0, "quantity": 20}]}\n'
+    'JSON: {"items": [{"material": "açacak", "width": 0, "height": 0, "quantity": 10, "budget": 0}, '
+    '{"material": "organizer", "width": 0, "height": 0, "quantity": 20, "budget": 0}]}\n'
     'User: "Açacak anahtarlık istiyorum, 50 adet ne kadar tutar?"\n'
-    'JSON: {"items": [{"material": "açacak anahtarlık", "width": 0, "height": 0, "quantity": 50}]}\n'
+    'JSON: {"items": [{"material": "açacak anahtarlık", "width": 0, "height": 0, "quantity": 50, "budget": 0}]}\n'
     'User: "bir adet organizer istiyorum"\n'
-    'JSON: {"items": [{"material": "organizer", "width": 0, "height": 0, "quantity": 1}]}\n'
+    'JSON: {"items": [{"material": "organizer", "width": 0, "height": 0, "quantity": 1, "budget": 0}]}\n'
     'User: "Dekota + UV istiyorum"\n'
-    'JSON: {"items": [{"material": "dekota + uv", "width": 0, "height": 0, "quantity": 0}]}'
+    'JSON: {"items": [{"material": "dekota + uv", "width": 0, "height": 0, "quantity": 0, "budget": 0}]}\n'
+    'User: "2000 TL bütçem var, 10x10 pleksi istiyorum, kaç adet alabilirim?"\n'
+    'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 0, "budget": 2000}]}\n'
+    'User: "elimde 500 lira var, açacaktan kaç tane alırım"\n'
+    'JSON: {"items": [{"material": "açacak", "width": 0, "height": 0, "quantity": 0, "budget": 500}]}'
 )
 
 def _is_pricing_query(query: str) -> bool:
@@ -131,28 +150,41 @@ def _extract_pricing_request(query: str) -> dict:
     return json.loads(json_text)
 
 
-def _calculate_line_item(item: dict) -> tuple[str, int, float]:
-    """Validate and price a single order item, returning (material, quantity, total)."""
+def _calculate_line_item(item: dict) -> tuple[str, int, float, float | None]:
+    """Validate and price a single order item.
+
+    Returns (material, quantity, total, remaining_budget). remaining_budget
+    is None for a normal "N adet" order, and the leftover money for a
+    budget-driven "kaç adet alabilirim" order (see calculate_max_quantity).
+    """
     material = item.get("material")
     width = item.get("width")
     height = item.get("height")
     quantity = item.get("quantity", 1)
+    budget = item.get("budget")
 
     try:
         width = float(width) if width is not None else None
         height = float(height) if height is not None else None
         quantity = int(quantity) if quantity is not None else None
+        budget = float(budget) if budget else None
     except (TypeError, ValueError):
         raise ValueError(
-            "Lütfen hesaplama yapabilmemiz için en, boy ve adet "
+            "Lütfen hesaplama yapabilmemiz için en, boy, adet ya da bütçe "
             "bilgilerini tam olarak giriniz."
         )
 
+    if budget and budget > 0 and not quantity:
+        resolved_material, max_quantity, total_price, remaining_budget = calculate_max_quantity(
+            str(material) if material else material, width, height, budget
+        )
+        return resolved_material, max_quantity, total_price, remaining_budget
+
     resolved_material, total_price = calculate_price(
-    str(material) if material else material, width, height, quantity
+        str(material) if material else material, width, height, quantity
     )
     assert quantity is not None
-    return resolved_material, quantity, total_price
+    return resolved_material, quantity, total_price, None
 
 def _format_pricing_response(query: str) -> str:
     try:
@@ -180,7 +212,7 @@ def _format_pricing_response(query: str) -> str:
             continue
 
         try:
-            material, quantity, total_price = _calculate_line_item(item)
+            material, quantity, total_price, remaining_budget = _calculate_line_item(item)
         except ValueError as e:
             label = item.get("material") or "Bilinmeyen kalem"
             print(f"Kalem hatası ({label}): {e}")
@@ -189,7 +221,13 @@ def _format_pricing_response(query: str) -> str:
 
         any_success = True
         grand_total += total_price
-        lines.append(f"- {quantity} adet {material.title()} -> {total_price:,.2f} TL")
+        if remaining_budget is not None:
+            lines.append(
+                f"- 💰 En fazla {quantity} adet {material.title()} alabilirsin "
+                f"-> {total_price:,.2f} TL harcanır, {remaining_budget:,.2f} TL bakiye kalır."
+            )
+        else:
+            lines.append(f"- {quantity} adet {material.title()} -> {total_price:,.2f} TL")
 
     if not any_success:
         return "\n".join(lines)

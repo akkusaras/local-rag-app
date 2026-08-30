@@ -20,6 +20,7 @@ _MISSING_DATA_MESSAGE = (
     "Lütfen hesaplama yapabilmemiz için en, boy ve adet bilgilerini tam olarak giriniz."
 )
 _MISSING_AREA_MESSAGE = "Lütfen alan bazlı bu malzeme için en ve boy bilgilerini giriniz."
+_MISSING_BUDGET_MESSAGE = "Lütfen hesaplama yapabilmemiz için bütçe tutarını tam olarak giriniz."
 
 
 class FixedMaterial(TypedDict):
@@ -169,6 +170,18 @@ def _require_positive_number(value: float | None) -> float:
     return number
 
 
+def _require_positive_budget(value: float | None) -> float:
+    if value is None:
+        raise ValueError(_MISSING_BUDGET_MESSAGE)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(_MISSING_BUDGET_MESSAGE) from None
+    if number <= 0:
+        raise ValueError(_MISSING_BUDGET_MESSAGE)
+    return number
+
+
 def _to_float_or_none(value: float | None) -> float | None:
     if value is None:
         return None
@@ -176,6 +189,40 @@ def _to_float_or_none(value: float | None) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _resolve_unit_price(
+    material: str | None,
+    width: float | None,
+    height: float | None,
+) -> tuple[str, float]:
+    """Resolve `material` and return (resolved_name, price_for_a_single_unit).
+
+    For an area-based material, "a single unit" means one item at the given
+    width x height. Shared by calculate_price() (unit price x quantity) and
+    calculate_max_quantity() (budget // unit price) so both start from the
+    exact same resolution and pricing logic.
+    """
+    if not material or not str(material).strip():
+        raise ValueError(_MISSING_DATA_MESSAGE)
+
+    materials = _get_materials()
+    resolved_key = _resolve_material(material, materials)
+
+    if resolved_key is None:
+        raise ValueError(_UNKNOWN_MATERIAL_MESSAGE)
+
+    entry = materials[resolved_key]
+
+    if entry["type"] == "fixed":
+        return resolved_key, entry["price"]
+
+    width_value = _to_float_or_none(width)
+    height_value = _to_float_or_none(height)
+    if not width_value or not height_value:
+        raise ValueError(_MISSING_AREA_MESSAGE)
+
+    return resolved_key, entry["multiplier"] * width_value * height_value
 
 
 def calculate_price(
@@ -191,24 +238,35 @@ def calculate_price(
     typed (typos/substring matches resolve to the correct material).
     """
     quantity = _require_positive_number(quantity)
+    resolved_key, unit_price = _resolve_unit_price(material, width, height)
+    return resolved_key, quantity * unit_price
 
-    if not material or not str(material).strip():
-        raise ValueError(_MISSING_DATA_MESSAGE)
 
-    materials = _get_materials()
-    resolved_key = _resolve_material(material, materials)
+def calculate_max_quantity(
+    material: str | None,
+    width: float | None,
+    height: float | None,
+    budget: float | None,
+) -> tuple[str, int, float, float]:
+    """Given a budget instead of a quantity, work out how many units fit in it.
 
-    if resolved_key is None:
-        raise ValueError(_UNKNOWN_MATERIAL_MESSAGE)
+    Returns (resolved_material_name, max_quantity, total_price, remaining_budget).
+    max_quantity is rounded down (you can't buy a fraction of an item), and
+    remaining_budget is whatever's left over after buying that many.
+    """
+    budget_value = _require_positive_budget(budget)
+    resolved_key, unit_price = _resolve_unit_price(material, width, height)
 
-    entry = materials[resolved_key]
+    if unit_price <= 0:
+        raise ValueError(f"{resolved_key.title()} için geçerli bir birim fiyat bulunamadı.")
 
-    if entry["type"] == "fixed":
-        return resolved_key, quantity * entry["price"]
+    max_quantity = int(budget_value // unit_price)
+    if max_quantity <= 0:
+        raise ValueError(
+            f"Bu bütçeyle ({budget_value:,.2f} TL) en az 1 adet {resolved_key} bile "
+            f"alamazsın — birim fiyatı {unit_price:,.2f} TL."
+        )
 
-    width_value = _to_float_or_none(width)
-    height_value = _to_float_or_none(height)
-    if not width_value or not height_value:
-        raise ValueError(_MISSING_AREA_MESSAGE)
-
-    return resolved_key, entry["multiplier"] * width_value * height_value * quantity
+    total_price = max_quantity * unit_price
+    remaining_budget = budget_value - total_price
+    return resolved_key, max_quantity, total_price, remaining_budget
