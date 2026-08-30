@@ -73,6 +73,13 @@ EXTRACTION_SYSTEM_PROMPT = (
     "\"quantity\" and \"budget\" for the same item — exactly one of them "
     "should be non-zero (unless the user gave neither, in which case both "
     "are 0). "
+    "STRICT: \"ne kadar alabilirim\", \"ne kadar alırım\", \"kaça alırım\", and "
+    "\"kaç tane/adet alabilirim\" ALL mean the same thing — a budget-driven "
+    "quantity question — no matter which one is used. This is DIFFERENT from "
+    "\"ne kadar tutar\" / \"ne kadar eder\" (asking for a total price, used "
+    "with an explicit quantity). Whichever phrase closes the sentence, it is "
+    "part of the question, NEVER part of the material name — the material is "
+    "always the noun between the money amount and that closing phrase. "
     "STRICT: Material names can be compound, made of two or more words, "
     "joined either by '+'/'-' (e.g. \"dekota + uv\", \"ahşap + pleksi\") or "
     "simply written next to each other with no separator (e.g. \"açacak "
@@ -99,7 +106,11 @@ EXTRACTION_SYSTEM_PROMPT = (
     'User: "2000 TL bütçem var, 10x10 pleksi istiyorum, kaç adet alabilirim?"\n'
     'JSON: {"items": [{"material": "pleksi", "width": 10, "height": 10, "quantity": 0, "budget": 2000}]}\n'
     'User: "elimde 500 lira var, açacaktan kaç tane alırım"\n'
-    'JSON: {"items": [{"material": "açacak", "width": 0, "height": 0, "quantity": 0, "budget": 500}]}'
+    'JSON: {"items": [{"material": "açacak", "width": 0, "height": 0, "quantity": 0, "budget": 500}]}\n'
+    'User: "1000 TL\'ye pleksi istiyorum, ne kadar alabilirim?"\n'
+    'JSON: {"items": [{"material": "pleksi", "width": 0, "height": 0, "quantity": 0, "budget": 1000}]}\n'
+    'User: "1000 tl ye Aleksis istiyorum ne kadar alabilirim"\n'
+    'JSON: {"items": [{"material": "aleksis", "width": 0, "height": 0, "quantity": 0, "budget": 1000}]}'
 )
 
 def _is_pricing_query(query: str) -> bool:
@@ -214,7 +225,14 @@ def _format_pricing_response(query: str) -> str:
         try:
             material, quantity, total_price, remaining_budget = _calculate_line_item(item)
         except ValueError as e:
-            label = item.get("material") or "Bilinmeyen kalem"
+            # If pricing.py already resolved the material before hitting a
+            # downstream problem (missing size, budget too small), it
+            # attaches the corrected name to the exception — prefer that
+            # over the customer's raw, possibly-misspelled input so they see
+            # what we actually understood, e.g. "Pleksi" instead of "Aleksis".
+            resolved_label = getattr(e, "material", None)
+            label = (resolved_label or item.get("material") or "Bilinmeyen kalem")
+            label = label.title() if isinstance(label, str) else label
             print(f"Kalem hatası ({label}): {e}")
             lines.append(f"⚠️ {label}: {e}")
             continue

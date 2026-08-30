@@ -220,7 +220,14 @@ def _resolve_unit_price(
     width_value = _to_float_or_none(width)
     height_value = _to_float_or_none(height)
     if not width_value or not height_value:
-        raise ValueError(_MISSING_AREA_MESSAGE)
+        # Attach the resolved (corrected) name to the exception so the
+        # caller can show the customer the material we actually understood
+        # ("Pleksi") instead of echoing back their raw, possibly-misspelled
+        # input ("Aleksis") — resolution already succeeded by this point,
+        # only the size is missing.
+        error = ValueError(_MISSING_AREA_MESSAGE)
+        error.material = resolved_key
+        raise error
 
     return resolved_key, entry["multiplier"] * width_value * height_value
 
@@ -258,14 +265,18 @@ def calculate_max_quantity(
     resolved_key, unit_price = _resolve_unit_price(material, width, height)
 
     if unit_price <= 0:
-        raise ValueError(f"{resolved_key.title()} için geçerli bir birim fiyat bulunamadı.")
+        error = ValueError(f"{resolved_key.title()} için geçerli bir birim fiyat bulunamadı.")
+        error.material = resolved_key
+        raise error
 
     max_quantity = int(budget_value // unit_price)
     if max_quantity <= 0:
-        raise ValueError(
+        error = ValueError(
             f"Bu bütçeyle ({budget_value:,.2f} TL) en az 1 adet {resolved_key} bile "
             f"alamazsın — birim fiyatı {unit_price:,.2f} TL."
         )
+        error.material = resolved_key
+        raise error
 
     total_price = max_quantity * unit_price
     remaining_budget = budget_value - total_price
